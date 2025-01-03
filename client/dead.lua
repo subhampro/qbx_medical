@@ -20,7 +20,6 @@ end
 
 exports('PlayDeadAnimation', playDeadAnimation)
 
----put player in death animation and make invincible
 function OnDeath(attacker, weapon)
     SetDeathState(sharedConfig.deathState.DEAD)
     TriggerEvent('qbx_medical:client:onPlayerDied', attacker, weapon)
@@ -48,38 +47,57 @@ end
 exports('KillPlayer', OnDeath)
 
 local function respawn()
+    if not allowRespawn then return end
+    
     local success = lib.callback.await('qbx_medical:server:respawn')
     if not success then return end
+    
     if QBX.PlayerData.metadata.ishandcuffed then
         TriggerEvent('police:client:GetCuffed', -1)
     end
+    
     TriggerEvent('police:client:DeEscort')
     LocalPlayer.state.invBusy = false
 end
 
----Allow player to respawn
 function CheckForRespawn()
-    RespawnHoldTime = 5
+    local respawnTimer = 0
+    local isHoldingKey = false
+    
     while DeathState == sharedConfig.deathState.DEAD do
-        if IsControlPressed(0, 38) and RespawnHoldTime <= 1 and allowRespawn then
+        Wait(0)
+        
+        if IsControlPressed(0, 38) then -- E key
+            if not isHoldingKey then
+                isHoldingKey = true
+                respawnTimer = 0
+            end
+            
+            respawnTimer = respawnTimer + GetFrameTime()
+            RespawnHoldTime = math.max(0, math.ceil(3 - respawnTimer))
+            
+            if respawnTimer >= 3.0 then
+                local result = lib.callback.await('qbx_medical:server:respawn')
+                if result then
+                    TriggerEvent('police:client:DeEscort')
+                    LocalPlayer.state.invBusy = false
+                    return
+                end
+            end
+        else
+            if isHoldingKey then
+                isHoldingKey = false
+            end
+            respawnTimer = 0
+            RespawnHoldTime = 3
+        end
+
+        if DeathTime > 0 then
+            DeathTime = DeathTime - GetFrameTime()
+        elseif DeathTime <= 0 then
             respawn()
             return
         end
-        if IsControlPressed(0, 38) then
-            RespawnHoldTime -= 1
-        end
-        if IsControlReleased(0, 38) then
-            RespawnHoldTime = 5
-        end
-        if RespawnHoldTime <= 0 then
-            RespawnHoldTime = 0
-        end
-        DeathTime -= 1
-        if DeathTime <= 0 and allowRespawn then
-            respawn()
-            return
-        end
-        Wait(1000)
     end
 end
 
@@ -93,10 +111,6 @@ exports('DisableRespawn', function()
     allowRespawn = false
 end)
 
----log the death of a player along with the attacker and the weapon used.
----@param victim number ped
----@param attacker number ped
----@param weapon string weapon hash
 local function logDeath(victim, attacker, weapon)
     local playerId = NetworkGetPlayerIndexFromPed(victim)
     local playerName = (' %s (%d)'):format(GetPlayerName(playerId), GetPlayerServerId(playerId)) or locale('info.self_death')
@@ -109,9 +123,6 @@ local function logDeath(victim, attacker, weapon)
     lib.callback.await('qbx_medical:server:log', false, 'logDeath', message)
 end
 
----when player is killed by another player, set last stand mode, or if already in last stand mode, set player to dead mode.
----@param event string
----@param data table
 AddEventHandler('gameEventTriggered', function(event, data)
     if event ~= 'CEventNetworkEntityDamage' then return end
     local victim, attacker, victimDied, weapon = data[1], data[2], data[4], data[7]
